@@ -23,7 +23,10 @@ use actix::{Addr, System};
 use actix_web::{
     self, error::ResponseError, server::{HttpServer, IntoHttpHandler, StopServer}, AsyncResponder,
     FromRequest, HttpMessage, HttpResponse, Query,
+    middleware::{ Started, Response},
+    error::Result as WebResult,
 };
+
 use failure;
 use futures::{Future, IntoFuture};
 use serde::{
@@ -53,6 +56,9 @@ pub type AppConfig = Arc<dyn Fn(App) -> App + 'static + Send + Sync>;
 /// Type alias for the `actix-web` HTTP server runtime address.
 type HttpServerAddr = Addr<HttpServer<<App as IntoHttpHandler>::Handler>>;
 
+/// Type alias for actual middleware
+pub type Middleware = dyn actix_web::middleware::Middleware<ServiceApiState>  + Send + Sync;
+
 /// Raw `actix-web` backend requests handler.
 #[derive(Clone)]
 pub struct RequestHandler {
@@ -62,6 +68,31 @@ pub struct RequestHandler {
     pub method: actix_web::http::Method,
     /// Inner handler.
     pub inner: Arc<RawHandler>,
+}
+
+
+/// Raw `actix-web` middleware adapter.
+#[derive(Clone)]
+pub struct MiddlewareProxyHolder {
+    /// Inner handler.
+    pub middleware: Arc<Middleware>,
+}
+
+impl actix_web::middleware::Middleware<ServiceApiState> for MiddlewareProxyHolder {
+    fn start(&self, req:  &HttpRequest) -> WebResult<Started> {
+        self.middleware.start(req)
+    }
+
+    fn response(&self, req: &HttpRequest, resp: HttpResponse) -> WebResult<Response> {
+        self.middleware.response(req, resp)
+    }
+}
+
+impl fmt::Debug for MiddlewareProxyHolder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MiddlewareProxyHolder")
+            .finish()
+    }
 }
 
 impl fmt::Debug for RequestHandler {
@@ -77,6 +108,7 @@ impl fmt::Debug for RequestHandler {
 #[derive(Debug, Clone, Default)]
 pub struct ApiBuilder {
     handlers: Vec<RequestHandler>,
+    middleware: Vec<MiddlewareProxyHolder>,
 }
 
 impl ApiBuilder {
@@ -89,6 +121,7 @@ impl ApiBuilder {
 impl ServiceApiBackend for ApiBuilder {
     type Handler = RequestHandler;
     type Backend = actix_web::Scope<ServiceApiState>;
+    type Interceptor = MiddlewareProxyHolder;
 
     fn raw_handler(&mut self, handler: Self::Handler) -> &mut Self {
         self.handlers.push(sanitize(handler));
@@ -102,7 +135,17 @@ impl ServiceApiBackend for ApiBuilder {
                 inner(request)
             });
         }
+
+        for m in self.middleware.clone() {
+            output = output.middleware(m);
+        }
         output
+    }
+
+    fn interceptor<M: actix_web::middleware::Middleware<ServiceApiState> + Send + Sync>(&mut self, interceptor: M) -> &mut Self {
+        let holder = MiddlewareProxyHolder{middleware: Arc::new(interceptor)};
+        self.middleware.push(holder);
+        self
     }
 }
 

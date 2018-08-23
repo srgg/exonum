@@ -41,6 +41,9 @@ pub trait ServiceApiBackend: Sized {
     /// Concrete backend API builder.
     type Backend;
 
+    /// Concrete interceptor
+    type Interceptor;
+
     /// Adds the given endpoint handler to the backend.
     fn endpoint<N, Q, I, R, F, E>(&mut self, name: N, endpoint: E) -> &mut Self
     where
@@ -74,6 +77,9 @@ pub trait ServiceApiBackend: Sized {
 
     /// Binds API handlers to the given backend.
     fn wire(&self, output: Self::Backend) -> Self::Backend;
+
+    /// Binds API interceptors to the given backend.
+    fn interceptor<M: actix_web::middleware::Middleware<ServiceApiState> + Send + Sync> (&mut self, interceptor: M) -> &mut Self;
 }
 
 /// Service API builder for the concrete API scope or in other words
@@ -135,6 +141,12 @@ impl ServiceApiScope {
     pub fn web_backend(&mut self) -> &mut actix::ApiBuilder {
         &mut self.actix_backend
     }
+    
+    /// Adds the given actix-web middleware the API scope.
+    pub fn interceptor<M: actix_web::middleware::Middleware<ServiceApiState> + Send + Sync> (&mut self, interceptor: M) -> &mut Self {
+        self.actix_backend.interceptor(interceptor);
+        self
+    }   
 }
 
 /// Service API builder, which is used to add service-specific endpoints to the node API.
@@ -220,6 +232,7 @@ impl ServiceApiScope {
 pub struct ServiceApiBuilder {
     public_scope: ServiceApiScope,
     private_scope: ServiceApiScope,
+//    interceptors: ServiceAPIInterceptors,
 }
 
 impl ServiceApiBuilder {
@@ -233,7 +246,7 @@ impl ServiceApiBuilder {
         &mut self.public_scope
     }
 
-    /// Returns a mutable reference to the private API scope builder.
+    /// Returns a mutable reference to the middleware builder.
     pub fn private_scope(&mut self) -> &mut ServiceApiScope {
         &mut self.private_scope
     }
@@ -348,4 +361,24 @@ impl ApiAggregator {
         self::node::public::SystemApi::new(shared_api_state).wire(builder.public_scope());
         builder
     }
+}
+
+struct MyInterceptor;
+
+use actix_web;
+use std::result;
+use actix_web::error as web_error;
+
+impl actix_web::middleware::Middleware<ServiceApiState> for MyInterceptor {
+    fn start(&self, req: &actix::HttpRequest) -> web_error::Result<actix_web::middleware::Started> {
+        result::Result::Ok(actix_web::middleware::Started::Done)
+    }
+}
+
+#[test]
+fn check_middleware_creation() {
+    let intrsptr = MyInterceptor{};
+    let mut sb: ServiceApiBuilder = ServiceApiBuilder::default();
+//    sb.public_scope().web_backend().
+    sb.public_scope.web_backend().interceptor(intrsptr);
 }
