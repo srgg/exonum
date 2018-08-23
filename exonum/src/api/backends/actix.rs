@@ -53,6 +53,9 @@ pub type AppConfig = Arc<dyn Fn(App) -> App + 'static + Send + Sync>;
 /// Type alias for the `actix-web` HTTP server runtime address.
 type HttpServerAddr = Addr<HttpServer<<App as IntoHttpHandler>::Handler>>;
 
+/// Type alias for actual middleware
+pub type Middleware = dyn actix_web::middleware::Middleware<ServiceApiState>  + Send + Sync;
+
 /// Raw `actix-web` backend requests handler.
 #[derive(Clone)]
 pub struct RequestHandler {
@@ -62,6 +65,35 @@ pub struct RequestHandler {
     pub method: actix_web::http::Method,
     /// Inner handler.
     pub inner: Arc<RawHandler>,
+}
+
+
+/// Raw `actix-web` middleware adapter.
+#[derive(Clone)]
+pub struct MiddlewareHolder {
+
+    /// Inner handler.
+    pub middleware: Arc<Middleware>,
+}
+
+impl fmt::Debug for MiddlewareHolder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+
+
+        f.debug_struct("MiddlewareHolder")
+            .finish()
+    }
+}
+
+impl<M> From<M> for MiddlewareHolder
+    where
+        M: actix_web::middleware::Middleware<ServiceApiState> + Send + Sync,
+{
+    fn from(m: M) -> Self {
+        Self {
+            middleware: Arc::from(m),
+        }
+    }
 }
 
 impl fmt::Debug for RequestHandler {
@@ -77,6 +109,7 @@ impl fmt::Debug for RequestHandler {
 #[derive(Debug, Clone, Default)]
 pub struct ApiBuilder {
     handlers: Vec<RequestHandler>,
+    middleware: Vec<MiddlewareHolder>,
 }
 
 impl ApiBuilder {
@@ -89,6 +122,7 @@ impl ApiBuilder {
 impl ServiceApiBackend for ApiBuilder {
     type Handler = RequestHandler;
     type Backend = actix_web::Scope<ServiceApiState>;
+    type Interceptor = MiddlewareHolder;
 
     fn raw_handler(&mut self, handler: Self::Handler) -> &mut Self {
         self.handlers.push(sanitize(handler));
@@ -103,6 +137,12 @@ impl ServiceApiBackend for ApiBuilder {
             });
         }
         output
+    }
+
+    fn interceptor<M: actix_web::middleware::Middleware<ServiceApiState> + Send + Sync>(&mut self, interceptor: M) -> &mut Self {
+        let holder = MiddlewareHolder::from(interceptor);
+        self.middleware.push(holder);
+        self
     }
 }
 
